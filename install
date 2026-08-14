@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+# ji installation script
+
+[[ -n "$1" && "$1" == "-l" ]] && make_symlink=1 && shift
+
+[[ -z "$1" ]] && echo "Installation path not provided" && exit 1
+[[ ! -d "$1" ]] && echo "Installation path does not exist" && exit 1
+
+installation_path="$(realpath "$1")"
+
+src_path="$(realpath src)"
+
+stat_result="$(stat -c "%N %F" "$src_path" 2>/dev/null)"
+[[ $? -ne 0 ]] && \
+  echo "src direcotry missing" && exit 1
+[[ ! -d "$src_path" ]] && \
+  echo "src directory missing" && exit 1
+
+stat_result="$(stat -c "%N %F" "$src_path""/ji" 2>/dev/null)"
+[[ $? -ne 0 ]] && \
+  echo "ji script missing" && exit 1
+[[ ! -f "$src_path""/ji" ]] && \
+  echo "ji script missing" && exit 1
+
+stat_result="$(stat -c "%N %F" "$src_path""/screen.bash" 2>/dev/null)"
+[[ $? -ne 0 ]] && \
+  echo "Dependency script screen.bash missing" && exit 1
+[[ ! -f "$src_path""/screen.bash" ]] && \
+  echo "Dependency script screen.bash missing" && exit 1
+
+ji_path="$src_path""/ji"
+dep_screen_path="$src_path""/screen.bash"
+
+[[ -n "$make_symlink" && $make_symlink -ne 0 ]] && \
+  {
+    ln -s -t "$installation_path" "$dep_screen_path"
+    ln -s -t "$installation_path" "$ji_path"
+  } || \
+  {
+    cp "$dep_screen_path" "$installation_path"
+    cp "$ji_path" "$installation_path"
+  }
+
+installed_path="$installation_path""/ji"
+
+stat_result="$(stat -c "%N %F" "$installed_path" 2>/dev/null)"
+[[ $? -ne 0 ]] && echo "Installation at $installation_path failed" && exit 1
+
+[[ -z "$make_symlink" || $make_symlink -eq 0 ]] && \
+  sed -i "s|source\s\+screen\.bash|source $dep_screen_path|" "$installed_path"
+
+help_msg="$("$installed_path" -h)"
+[[ 
+  -z "$help_msg" || 
+  ! "$help_msg" =~ ^ji:[[:space:]]Use.*arrow[[:space:]]keys.*Enter[[:space:]]key.*$
+]] && \
+  echo "Installation corrupted" && \
+  rm -f "$installed_path" && \
+  exit 1
+
+echo "Installation successful"

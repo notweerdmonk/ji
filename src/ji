@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+
+source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")"/screen.bash
+
+load_todos() {
+    [[ $# -lt 2 ]] && \
+        {
+            bold
+            fg 196
+            echo "Insufficient arguments providied"
+            reset_style
+        } && exit 1
+    [[ -z "$2" ]] && \
+        {
+            bold
+            fg 196
+            echo "TODOS file not provided"
+            reset_style
+        } && exit 1
+    [[ ! -f "$2" ]] && \
+        {
+            bold
+            fg 196
+            echo "TODOS file not found"
+            reset_style
+        } && exit 1
+    
+    declare -n array_name="$1"
+    IFS=$'\n' read -d '' -r -a ${!array_name} < "$2"
+}
+
+save_todos() {
+    [[ $# -lt 2 ]] && \
+        {
+            bold
+            fg 196
+            echo "Insufficient arguments providied"
+            reset_style
+        } && return 1
+    [[ -z "$2" ]] && \
+        {
+            bold
+            fg 196
+            echo "TODOS file not provided"
+            reset_style
+        } && return 1
+    [[ ! -f "$2" ]] && \
+        {
+            bold
+            fg 196
+            echo "TODOS file not found"
+            reset_style
+        } && return 1
+    
+    declare -n array_name="$1"
+    printf "%s\n" "${array_name[@]}" > "$2"
+}
+
+[[ -n "$1" && "$1" == "-h" ]] && \
+    {
+        echo -n "$(basename "${BASH_SOURCE[0]}"): "
+        echo "Use up/down arrow keys to browse todos and Enter key to mark completed"
+        exit 0
+    }
+
+[[ -n "$TODOS_FILE" && -f "$TODOS_FILE" ]] && todos_file="$TODOS_FILE"
+[[ -n "$1" ]] && todos_file="$1"
+
+load_todos todos "$todos_file"
+todos_count=${#todos[@]}
+
+[[ $todos_count -eq 0 ]] && \
+    {
+        bold
+        fg 214
+        printsln "No TODOS found"
+        reset_style
+        exit 0
+    }
+
+get_cursor() {
+    declare -n array_name="$1"
+
+    cursor_str=$(cursor_position)
+    IFS=' ' read -r -a ${!array_name} <<< "$cursor_str"
+}
+
+get_cursor orig_cursor
+
+required_lines=$(($todos_count + 1))
+
+echo -n | tr -d ' '
+
+if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
+then
+    reserve_space $(($required_lines))
+    bold
+    print_at ${orig_cursor[0]} ${orig_cursor[1]} "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
+    reset_style
+    cursor_move $((${orig_cursor[0]} + 1)) 0
+    get_cursor cursor
+    print_array todos
+else
+    push_screen $required_lines
+    bold
+    printsln "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
+    reset_style
+    cursor_save
+    print_array todos
+    cursor_restore
+    get_cursor cursor
+fi
+
+cursor_move ${cursor[0]} ${cursor[1]}
+bg 8
+prints "${todos[0]}"
+reset_style
+cursor_move ${cursor[0]} 0
+
+todo_index=0
+
+print_todo() {
+    prints "${todos[$1]}"
+    cursor_move $((${cursor[0]} + $1)) 0
+}
+
+increment_todo_index() {
+    [[ $todo_index -eq $(($todos_count - 1)) ]] && \
+        {
+            todo_index=0
+            cursor_move $((${cursor[0]} + $todo_index)) 0
+        } || \
+        {
+            ((++todo_index))
+            cursor_down
+        }
+    clear_line
+}
+
+decrement_todo_index() {
+    [[ $todo_index -eq 0 ]] && \
+        {
+            todo_index=$(($todos_count - 1))
+            cursor_move $((${cursor[0]} + $todo_index)) 0
+        } || \
+        {
+            ((--todo_index))
+            cursor_up
+        }
+}
+
+key_up() {
+    print_todo $todo_index
+    decrement_todo_index
+    clear_line
+    bg 8
+    print_todo $todo_index
+    reset_style
+}
+
+key_down() {
+    print_todo $todo_index
+    increment_todo_index
+    clear_line
+    bg 8
+    print_todo $todo_index
+    reset_style
+}
+
+key_enter() {
+    stop=1
+    todoitem="${todos[$todo_index]}"
+}
+
+key_other() {
+    stop=1
+}
+
+end() {
+    cursor_move $((${cursor[0]} + $required_lines)) 0
+
+    if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
+    then
+        release_space
+    else
+        pop_screen $required_lines 
+    fi
+    
+    [[ -n "$todoitem" ]] && \
+        {
+            clear_line
+            bold
+            fg 76
+            printsln "$todoitem - marked as complete"
+            reset_style
+    
+            (indexed_array_find todos "$todoitem") && \
+                remove_indexed_array_item todos "$todoitem"
+        }
+    
+    
+    [[ ${#todos[@]} -eq 0 ]] && \
+        {
+            bold
+            fg 123
+            printsln "All TODOS complete"
+            reset_style
+        } || \
+        {
+            clear_line
+            bold
+            printsln "TODOS Remaining"
+            reset_style
+            print_array todos
+            print_newline
+        }
+}
+
+trap end SIGINT
+
+stop=0
+
+while [[ $stop -eq 0 ]]
+do
+    key_dispatch
+    [[ $stop -ne 0 ]] && break
+done
+
+end
+
+save_todos todos "$todos_file"
