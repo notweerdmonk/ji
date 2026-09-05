@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
+# Adhere to strict mode another day
 source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")"/screen.bash
+
+set -Eeuo pipefail
 
 load_todos() {
     [[ $# -lt 2 ]] && \
@@ -24,9 +27,101 @@ load_todos() {
             echo "TODOS file not found"
             reset_style
         } && exit 1
-    
+
     declare -n array_name="$1"
     IFS=$'\n' read -d '' -r -a ${!array_name} < "$2"
+}
+
+load_todos_cascade() {
+    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
+
+    declare -n array_name="$1"
+
+    local last_idx=-1
+    local parent_indent=0
+    local prev_indent=0
+    local cur_indent=0
+    local prev_item=""
+
+    declare -a indent_stack
+    indent_stack+=(0)
+
+    declare -A item_map
+    item_map["0"]="${!array_name}"
+
+    declare -n curr_item_arr="${!array_name}"
+
+    while IFS=$'\n' read -r item
+    do
+        [[ -z "$item" ]] && continue
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo $item
+
+        [[ ! "$item" =~ ^[[:space:]]*[[:alnum:][:punct:][:space:]]+$ ]] && \
+            continue
+
+        local indented_item="${item##* [![:alnum:][:punct:]]}"
+        local cur_indent=$(expr index "$item" "${indented_item%% *}")
+        item="$indented_item"
+        unset indented_item
+
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo ${indent_stack[@]}
+
+        local last_index=${indent_stack[-1]}
+
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo $cur_indent
+
+        [[ $cur_indent -eq $last_index ]] && \
+            {
+                curr_item_arr+=("$item")
+                ((++last_idx)) || :
+                item="${item// /_}"
+                item="${item//[[:punct:]]/_}"
+                item_map["$cur_indent"]="$item"
+            } || \
+            {
+                [[ $cur_indent -gt $last_index ]] && \
+                    {
+                        parent_indent=${indent_stack[-1]}
+                        indent_stack+=($cur_indent)
+
+                        declare -n curr_item_arr="${item_map[$parent_indent]}"
+                    } || \
+                        {
+                            [[ $cur_indent -le $last_index ]] && \
+                                {
+                                    local top=$((${#indent_stack[@]} - 1))
+                                    declare -n stack="indent_stack"
+                                    while [[
+                                                $top -gt 0 &&
+                                                $cur_indent -le ${stack[$top]}
+                                          ]]
+                                    do
+                                        unset indent_stack[$top]
+                                        ((--top)) || :
+                                    done
+                                    unset -n stack
+
+                                    parent_indent=${indent_stack[$top]}
+                                    indent_stack+=($cur_indent)
+
+                                    declare -n \
+                                        curr_item_arr="${item_map[$parent_indent]}"
+                                }
+                        }
+                curr_item_arr+=("$item")
+                ((++last_idx)) || :
+                item="${item// /_}"
+                item="${item//[[:punct:]]/_}"
+                item_map["$cur_indent"]="$item"
+            }
+
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo $last_idx
+    done < "$2"
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
+    [[ -v DEBUG && -n "$DEBUG" ]] && echo "---"
+
+    return 0
 }
 
 save_todos() {
@@ -51,77 +146,218 @@ save_todos() {
             echo "TODOS file not found"
             reset_style
         } && return 1
-    
-    declare -n array_name="$1"
-    printf "%s\n" "${array_name[@]}" > "$2"
+
+    save_todo_item "$1" "$2"
 }
 
-[[ -n "$1" && "$1" == "-h" ]] && \
-    {
-        echo -n "$(basename "${BASH_SOURCE[0]}"): "
-        echo "Use up/down arrow keys to browse todos and Enter key to mark completed"
-        exit 0
-    }
+save_todo_item() {
+    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
 
-[[ -n "$TODOS_FILE" && -f "$TODOS_FILE" ]] && todos_file="$TODOS_FILE"
-[[ -n "$1" ]] && todos_file="$1"
+    [[ $# -lt 2 ]] && return 1
 
-load_todos todos "$todos_file"
-todos_count=${#todos[@]}
+    declare -n array_name="$1"
+    local filename="$2"
+    local indent=0
 
-[[ $todos_count -eq 0 ]] && \
-    {
-        bold
-        fg 214
-        printsln "No TODOS found"
-        reset_style
-        exit 0
-    }
+    [[ $# -gt 2 ]] && indent="$3"
+
+    [[ -z "$filename" ]] && echo "Filename to save not provided" >&2 && exit 1
+
+    [[ -f "$filename" && $indent -eq 0 ]] && : > "$filename"
+
+    for item in "${array_name[@]}"
+    do
+        [[ -n "$indent" && $indent -ne 0 ]] && \
+            printf " %.s" $(seq 1 $(($indent * 2))) >> "$filename"
+        printf "%s\n" "$item" >> "$filename"
+        item="${item// /_}"
+        item="${item//[[:punct:]]/_}"
+        declare -n list="$item"
+        [[ -n "${list[*]}" && "${#list[@]}" -ne 0 ]] && \
+            save_todo_item "$item" "$filename" $(($indent + 2))
+        [[ -v list ]] && unset list && unset -n list
+    done
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
+
+    return 0
+}
+
+usage() {
+    local scriptname="$(basename "${BASH_SOURCE[0]}")"
+    echo    "$scriptname - a minimal terminal todo list manager"
+    echo
+    echo    "Usage: $(basename "${BASH_SOURCE[0]}") [-l] [-m markdown-file] file"
+    echo
+    echo Options
+    echo
+    echo -e "\t-l\tList only, do not update todo items"
+    echo -e "\t-m\tWrite todo list to a Markdown file"
+    echo -e "\t-h\tDisplay this message"
+    echo
+    echo    "Upon update of a todo item, the list gets written back to the todo"
+    echo    "list file. Listing the items only does not modify the file."
+    echo
+    echo    "Key bindings"
+    echo
+    echo -e "\tUp/Down arrow keys\tCycle all items under a parent todo item"
+    echo -e "\tRight arrow key\t\tExpand current todo item"
+    echo -e "\tLeft arrow key\t\tCollapse current todo item"
+    echo -e "\tEnter key\t\tMark current todo item as completed"
+    echo -e "\tCtrl - C\t\tQuit updating todo items without saving"
+    echo
+}
+
+parse_args() {
+    markdown_file=""
+    list_only=0
+    todos_file=""
+
+    while getopts ":m:lh" opt; do
+        case "$opt" in
+            m)
+                markdown_file="$OPTARG"
+                ;;
+            l)
+                list_only=1
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            :)
+                echo "Error: option -$OPTARG requires an argument" >&2
+                usage >&2
+                return 1
+                ;;
+            \?)
+                echo "Error: invalid option -$OPTARG" >&2
+                usage >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Remove parsed options.
+    shift $((OPTIND - 1))
+
+    # Require exactly one filename.
+    if [[ $# -ne 1 ]]; then
+        echo "Error: exactly one filename is required" >&2
+        return 1
+    fi
+
+    todos_file="$1"
+    [[ ! -f "$todos_file" ]] && \
+        {
+            echo "Error: todos file does not exist" >&2
+            return 1
+        }
+
+    [[ \
+        -z "$todos_file" && \
+        -v TODOS_FILE && \
+        -n "$TODOS_FILE" && \
+        -f "$TODOS_FILE"
+    ]] && todos_file="$TODOS_FILE" || true
+}
 
 get_cursor() {
     declare -n array_name="$1"
-
     cursor_str=$(cursor_position)
     IFS=' ' read -r -a ${!array_name} <<< "$cursor_str"
 }
 
-get_cursor orig_cursor
+setup_screen() {
+    get_cursor orig_cursor
 
-required_lines=$(($todos_count + 1))
+    required_lines=$(($todos_count + 1))
 
-echo -n | tr -d ' '
+    echo -n | tr -d ' '
 
-if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
-then
-    reserve_space $(($required_lines))
-    bold
-    print_at ${orig_cursor[0]} ${orig_cursor[1]} "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
+    [[ -n "$list_only" && $list_only -ne 0 ]] && \
+        {
+            declare outfile="/dev/stdout"
+            [[ -n "$markdown_file" ]] && \
+                outfile="$markdown_file"
+            printsln "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))" 1>"$outfile"
+            print_todo_item todos 1>>"$outfile"
+            exit 0
+        }
+
+    if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
+    then
+        reserve_space $(($required_lines))
+        bold
+        print_at \
+            ${orig_cursor[0]} ${orig_cursor[1]} \
+            "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
+        reset_style
+        cursor_move $((${orig_cursor[0]} + 1)) 0
+        get_cursor cursor
+        print_array current_todo_list
+    else
+        push_screen $required_lines
+        bold
+        printsln "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
+        reset_style
+        cursor_save
+        print_array current_todo_list
+        cursor_restore
+        get_cursor cursor
+    fi
+
+    cursor_move $((${cursor[0]} + $todo_index)) ${cursor[1]}
+    bg 8
+    prints "${current_todo_list[$todo_index]}"
     reset_style
-    cursor_move $((${orig_cursor[0]} + 1)) 0
-    get_cursor cursor
-    print_array todos
-else
-    push_screen $required_lines
-    bold
-    printsln "TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"
-    reset_style
-    cursor_save
-    print_array todos
-    cursor_restore
-    get_cursor cursor
-fi
+    cursor_move $((${cursor[0]} + $todo_index)) 0
+}
 
-cursor_move ${cursor[0]} ${cursor[1]}
-bg 8
-prints "${todos[0]}"
-reset_style
-cursor_move ${cursor[0]} 0
+destroy_screen() {
+    cursor_move $((${cursor[0]} + $required_lines)) 0
 
-todo_index=0
+    if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
+    then
+        release_space
+    else
+        pop_screen $required_lines
+    fi
+}
 
 print_todo() {
-    prints "${todos[$1]}"
+    prints "${current_todo_list[$1]}"
     cursor_move $((${cursor[0]} + $1)) 0
+}
+
+print_todo_item() {
+    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
+
+    declare -n array_name="$1"
+    local indent=0
+    [[ $# -gt 1 ]] && indent="$2"
+
+    # Print Markdown list markers for indent 0
+    [[ "$indent" == "-m" ]] && indent=-1
+
+    for item in "${array_name[@]}"
+    do
+        [[ -n "$indent" && $indent -ne 0 ]] && \
+            printf "  %.s" $(seq 1 $indent) && \
+            echo -n "- "
+        echo "$item"
+        item="${item// /_}"
+        item="${item//[[:punct:]]/_}"
+        declare -n list="$item"
+        [[ -n "${list[*]}" && "${#list[@]}" -ne 0 ]] && \
+            print_todo_item "$item" $(($indent + 1))
+    done
+    :
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
+
+    set +x
+    return 0
 }
 
 increment_todo_index() {
@@ -149,6 +385,55 @@ decrement_todo_index() {
         }
 }
 
+end() {
+    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
+
+    destroy_screen
+
+    [[ -v todoitem && -n "$todoitem" ]] && \
+        {
+            clear_line
+            bold
+            fg 76
+            printsln "$todoitem - marked as complete"
+            reset_style
+
+            (indexed_array_find current_todo_list "$todoitem") && \
+                remove_indexed_array_item current_todo_list "$todoitem"
+        }
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && echo "$current_todo_list"
+    [[ -v DEBUG && -n "$DEBUG" ]] && echo "${current_todo_list[@]}"
+
+    [[ ${#todos[@]} -eq 0 ]] && \
+        {
+            bold
+            fg 123
+            printsln "All TODOS complete"
+            reset_style
+        } || \
+        {
+            clear_line
+            bold
+            printsln "TODOS Remaining"
+            reset_style
+            print_todo_item todos
+            [[ -n "$markdown_file" ]] && \
+                {
+                    printsln
+                        "# TODOS ($(date +"%d %h %+4Y %H:%M:%S"))"$'\n'
+                        1>"$markdown_file"
+                    print_todo_item todos 1>>"$markdown_file"
+                }
+        }
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
+
+    save_todos todos "$todos_file"
+
+    return 0
+}
+
 key_up() {
     print_todo $todo_index
     decrement_todo_index
@@ -167,65 +452,117 @@ key_down() {
     reset_style
 }
 
+key_right() {
+    local item="${current_todo_list[$todo_index]}"
+    item="${item// /_}"
+    item="${item//[[:punct:]]/_}"
+    declare -n list="$item"
+    [[ -n "${list[*]}" && "${#list[@]}" -ne 0 ]] && \
+        {
+            todo_stack+=("${!current_todo_list}")
+            index_stack+=($todo_index)
+            item="${current_todo_list[$todo_index]}"
+            item="${item// /_}"
+            item="${item//[[:punct:]]/_}"
+            declare -gn current_todo_list="$item"
+            todos_count=${#current_todo_list[@]}
+            todo_index=0
+            destroy_screen
+            setup_screen
+        }
+    return 0
+}
+
+key_left() {
+    [[ "${#todo_stack[@]}" -ne 0 ]] && \
+        {
+            declare -gn current_todo_list="${todo_stack[-1]}"
+            unset todo_stack[-1]
+            todo_index=${index_stack[-1]}
+            unset index_stack[-1]
+            todos_count=${#current_todo_list[@]}
+            destroy_screen
+            setup_screen
+        }
+
+    return 0
+}
+
 key_enter() {
     stop=1
-    todoitem="${todos[$todo_index]}"
+    todoitem="${current_todo_list[$todo_index]}"
+    return 1
+}
+
+key_quit() {
+    stop=1
+    return 1
 }
 
 key_other() {
     stop=1
+    return 1
 }
 
-end() {
-    cursor_move $((${cursor[0]} + $required_lines)) 0
+if ! parse_args "$@"; then
+    exit 1
+fi
 
-    if [[ ${orig_cursor[0]} -lt $(($LINES - $required_lines)) ]]
-    then
-        release_space
-    else
-        pop_screen $required_lines 
-    fi
-    
-    [[ -n "$todoitem" ]] && \
-        {
-            clear_line
-            bold
-            fg 76
-            printsln "$todoitem - marked as complete"
-            reset_style
-    
-            (indexed_array_find todos "$todoitem") && \
-                remove_indexed_array_item todos "$todoitem"
-        }
-    
-    
-    [[ ${#todos[@]} -eq 0 ]] && \
-        {
-            bold
-            fg 123
-            printsln "All TODOS complete"
-            reset_style
-        } || \
-        {
-            clear_line
-            bold
-            printsln "TODOS Remaining"
-            reset_style
-            print_array todos
-            print_newline
-        }
-}
+# Name of first action item list
+todolist_name="todos"
 
+# Stack of action item list parents
+declare -a todo_stack
+
+# Stack of action item list parent indices
+declare -a index_stack
+
+# Index of selected action item in current list
+todo_index=0
+
+# Load the action items into memory
+load_todos_cascade "$todolist_name" "$todos_file"
+
+# Count of action items in current list
+[[ ! -v "$todolist_name" && -z "${todos[*]}" ]] && \
+    {
+        bold
+        fg 214
+        printsln "No TODOS found"
+        reset_style
+        exit 0
+    } || \
+    todos_count=${#todos[@]}
+
+# Current todo array
+declare -n current_todo_list="$todolist_name"
+
+register_key "key_up" "key_up"
+register_key "key_down" "key_down"
+register_key "key_left" "key_left"
+register_key "key_right" "key_right"
+
+register_key "k" "key_up"
+register_key "j" "key_down"
+register_key "h" "key_left"
+register_key "l" "key_right"
+
+register_key "key_stab" "key_left"
+register_key "key_tab" "key_right"
+
+register_key "key_enter" "key_enter"
+register_key "key_space" "key_enter"
+
+register_key "q" "key_quit"
+register_key "key_quit" "key_quit"
+
+register_key "*" "key_other"
+
+setup_screen
+
+trap "set +x" EXIT
 trap end SIGINT
 
-stop=0
-
-while [[ $stop -eq 0 ]]
-do
-    key_dispatch
-    [[ $stop -ne 0 ]] && break
-done
+while key_dispatch; do :; done
 
 end
-
-save_todos todos "$todos_file"

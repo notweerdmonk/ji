@@ -74,31 +74,45 @@ read_key() {
 
     [[ "$key" == $'\n' || "$key" == $'\r' || -z "$key" ]] && \
         printf "enter" || \
-        printf '%s' "$key"
+        {
+            [[ "$key" == $'\x20' ]] && printf "space" || \
+            printf '%s' "$key"
+        }
 }
 
 declare -A key_functions
+
+register_key() {
+    [[ -z "$1" || -z "$2" ]] && return 255
+    key_functions["$1"]="$2"
+}
 
 key_dispatch() {
 
     local k
     k=$(read_key)
 
+    [[ -v DEBUG && -n "$DEBUG" ]] && [[ -v key_dispatch["$k"] ]] && echo -e "$k\t${key_functions["$k"]}" >> keys.out
+
     case "$k" in
-        #$'\e[A') ${key_functions[key_up]} ;;
-        #$'\e[B') ${key_functions[key_down]} ;;
-        #$'\e[C') ${key_functions[key_right]} ;;
-        #$'\e[D') ${key_functions[key_left]} ;;
-        $'\e[A') key_up ;;
-        $'\e[B') key_down ;;
-        $'\e[C') key_right ;;
-        $'\e[D') key_left ;;
+        $'\e[A') ${key_functions[key_up]} ;;
+        $'\e[B') ${key_functions[key_down]} ;;
+        $'\e[C') ${key_functions[key_right]} ;;
+        $'\e[D') ${key_functions[key_left]} ;;
+        $'\e[Z') ${key_functions[key_stab]} ;;
+        $'\t') ${key_functions[key_tab]} ;;
 
-        "enter") key_enter ;;
+        "enter") ${key_functions[key_enter]} ;;
+        "space") ${key_functions[key_space]} ;;
 
-        "q") key_quit ;;
+        "q") ${key_functions[key_quit]} ;;
 
-        *) key_other "$k" ;;
+        *) [[ -v key_functions["$k"] && -n "${key_functions["$k"]}" ]] && \
+                {
+                    ${key_functions["$k"]} || :
+                } || \
+                ${key_functions["*"]}
+           ;;
     esac
 }
 
@@ -548,13 +562,18 @@ remove_indexed_array_item() {
     local element="$2"
     local array_len=${#array_name[@]}
     declare -a match_result
-    local match_result=("${array_name[@]/"$element"/}")
-    for i in ${!match_result[@]}
+    #local match_result=("${array_name[@]/"$element"/}")
+    #for i in ${!match_result[@]}
+    for i in ${!array_name[@]}
     do
-        [[ -z "${match_result[$i]}" ]] && unset match_result[$i]
+        #[[ -z "${match_result[$i]}" ]] && unset match_result[$i]
+        [[ -n "${array_name[$i]}" && ${array_name[$i]} == "$element" ]] && \
+            unset array_name[$i] && break
     done
-    [[ ${#match_result[@]} -ne $array_len ]] && \
-        array_name=("${match_result[@]}")
+    #[[ ${#match_result[@]} -ne $array_len ]] && \
+    #    array_name=("${match_result[@]}")
+
+    return 0
 }
 
 ###############################################################################
