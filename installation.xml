@@ -1,0 +1,7 @@
+<ji>
+  <install>
+    <srcpath>src</srcpath>
+    <script>ji</script>
+    <dep>screen.bash</dep>
+  </install>
+</ji>

@@ -2,61 +2,162 @@
 
 # ji installation script
 
-[[ -n "$1" && "$1" == "-l" ]] && make_symlink=1 && shift
+strip_debug() {
+    [[ -z "$1" || ! -f "$1" ]] && return
+    sed -Ei '/\[\[ -[nv] "?\$DEBUG"?.*/d' "$1"
+}
 
-[[ -z "$1" ]] && echo "Installation path not provided" && exit 1
-[[ ! -d "$1" ]] && echo "Installation path does not exist" && exit 1
+usage() {
+    local scriptname="$(basename "${BASH_SOURCE[0]}")"
+    echo    "$scriptname - installation script for terminal todo list manager"
+    echo
+    echo    "Usage: $(basename "${BASH_SOURCE[0]}") [-l] [-m manifest-file] path"
+    echo
+    echo Options
+    echo
+    echo -e "\t-l\tMake symlinks"
+    echo -e "\t-m\tRead package items from manifest file"
+    echo -e "\t-h\tDisplay this message"
+    echo
+}
 
-installation_path="$(realpath "$1")"
+parse_args() {
+    manifest=""
+    make_symlink=0
 
+    while getopts ":lm:h" opt; do
+        case "$opt" in
+            m)
+                manifest="$OPTARG"
+                ;;
+            l)
+                make_symlink=1
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            :)
+                echo "Error: option -$OPTARG requires an argument" >&2
+                usage >&2
+                return 1
+                ;;
+            \?)
+                echo "Error: invalid option -$OPTARG" >&2
+                usage >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Remove parsed options.
+    shift $((OPTIND - 1))
+
+    [[ $# -eq 0 ]] && \
+        {
+            echo "Error: installation path not provided" >&2
+            return 1
+        }
+
+    installation_path="$(realpath "$1")"
+
+    [[ ! -d "$installation_path" ]] && \
+        {
+            echo "Error: installation path does not exist" >&2
+            return 1
+        }
+
+    return 0
+}
+
+parse_args "$@" || exit 1
+
+# Package items
 src_path="$(realpath src)"
 
+script="ji"
+dep="screen.bash"
+
+ji_path="$src_path/$script"
+dep_screen_path="$src_path/$dep"
+
+[[ -n "$2" && -f "$2" ]] && \
+    {
+        src_path="$(xmllint --xpath "/ji/install/srcpath/text()" "$2")"
+        script="$(xmllint --xpath "/ji/install/script/text()" "$2")"
+        dep="$(xmllint --xpath "/ji/install/dep/text()" "$2")"
+    }
+
+# Check paths and package items
 stat_result="$(stat -c "%N %F" "$src_path" 2>/dev/null)"
-[[ $? -ne 0 ]] && \
-  echo "src direcotry missing" && exit 1
+[[ $? -ne 0 ]] && echo "src direcotry missing" && exit 1
 [[ ! -d "$src_path" ]] && \
-  echo "src directory missing" && exit 1
+    {
+        echo "src directory missing"
+        exit 1
+    }
 
 stat_result="$(stat -c "%N %F" "$src_path""/ji" 2>/dev/null)"
 [[ $? -ne 0 ]] && \
-  echo "ji script missing" && exit 1
+    {
+        echo "ji script missing"
+        exit 1
+    }
 [[ ! -f "$src_path""/ji" ]] && \
-  echo "ji script missing" && exit 1
+    {
+        echo "ji script missing"
+        exit 1
+    }
 
 stat_result="$(stat -c "%N %F" "$src_path""/screen.bash" 2>/dev/null)"
 [[ $? -ne 0 ]] && \
-  echo "Dependency script screen.bash missing" && exit 1
+    {
+        echo "Dependency script screen.bash missing"
+        exit 1
+    }
 [[ ! -f "$src_path""/screen.bash" ]] && \
-  echo "Dependency script screen.bash missing" && exit 1
+    {
+        echo "Dependency script screen.bash missing"
+        exit 1
+    }
 
-ji_path="$src_path""/ji"
-dep_screen_path="$src_path""/screen.bash"
-
+# Make symlinks or copy package items
 [[ -n "$make_symlink" && $make_symlink -ne 0 ]] && \
-  {
-    ln -s -t "$installation_path" "$dep_screen_path"
-    ln -s -t "$installation_path" "$ji_path"
-  } || \
-  {
-    cp "$dep_screen_path" "$installation_path"
-    cp "$ji_path" "$installation_path"
-  }
+    {
+        ln -s -t "$installation_path" "$dep_screen_path"
+        ln -s -t "$installation_path" "$ji_path"
+    } || \
+    {
+        cp "$dep_screen_path" "$installation_path"
+        cp "$ji_path" "$installation_path"
+    }
 
-installed_path="$installation_path""/ji"
+# Check installed items
+installed_path="$installation_path/$dep"
 
 stat_result="$(stat -c "%N %F" "$installed_path" 2>/dev/null)"
 [[ $? -ne 0 ]] && echo "Installation at $installation_path failed" && exit 1
+strip_debug "$installed_path"
 
+installed_path="$installation_path/$script"
+
+stat_result="$(stat -c "%N %F" "$installed_path" 2>/dev/null)"
+[[ $? -ne 0 ]] && echo "Installation at $installation_path failed" && exit 1
+strip_debug "$installed_path"
+
+# Verify checksums
 [[ -z "$make_symlink" || $make_symlink -eq 0 ]] && \
-  sed -i "s|source\s\+screen\.bash|source $dep_screen_path|" "$installed_path"
+    sed -i "s|source\s\+screen\.bash|source $dep_screen_path|" "$installed_path"
 
-help_msg="$("$installed_path" -h)"
-[[ 
-  -z "$help_msg" || 
-  ! "$help_msg" =~ ^ji:[[:space:]]Use.*arrow[[:space:]]keys.*Enter[[:space:]]key.*$
-]] && \
-  echo "Installation corrupted" && \
-  rm -f "$installed_path" && \
-  exit 1
+! (
+      md5sum "$ji_path" | md5sum --status --check - && \
+      md5sum "$dep_screen_path" | md5sum --status --check -
+  ) && \
+      {
+          echo "Installation corrupted"
+          rm -f "$installed_path"
+          exit 1
+      }
 
+# Cats rule!
 echo "Installation successful"
