@@ -12,7 +12,8 @@ cursor_down()       { printf "${CSI}%dB" "${1:-1}"; }
 cursor_right()      { printf "${CSI}%dC" "${1:-1}"; }
 cursor_left()       { printf "${CSI}%dD" "${1:-1}"; }
 
-cursor_move()       { printf "${CSI}%d;%dH" "$1" "$2"; }   # row col
+cursor_move()       { printf "${CSI}%d;%dH" "$1" "$2"; } # row col
+
 cursor_home()       { printf "${CSI}H"; }
 
 cursor_save()       { printf "${ESC}7"; }      # or CSI s
@@ -22,8 +23,12 @@ cursor_hide()       { printf "${CSI}?25l"; }
 cursor_show()       { printf "${CSI}?25h"; }
 
 cursor_position() {
-    printf "${CSI}6n" > /dev/tty
-    IFS='[;' read -sdR _ row col
+    local input="${1:-/dev/tty}"
+    local output="${2:-/dev/tty}"
+
+    printf "${CSI}6n" > "$output"
+    IFS='[;' read -sdR _ row col < "$input"
+
     printf "%s %s\n" "$row" "$col"
 }
 
@@ -63,14 +68,19 @@ printf_at() {
 ###############################################################################
 
 read_key() {
+    local input="${1:-/dev/tty}"
+
     local key
 
-    IFS= read -rsn1 key
-
-    if [[ $key == $'\e' ]]; then
-        read -rsn2 key2
-        key+="$key2"
-    fi
+    while IFS= read -rsn1 char
+    do
+        key+="$char"
+        if [[ "${key:0:1}" != $'\e' ]]; then
+            break
+        elif [[ ${#key} -eq 3 ]]; then
+            break
+        fi
+    done < "$input"
 
     [[ "$key" == $'\n' || "$key" == $'\r' || -z "$key" ]] && \
         printf "enter" || \
@@ -80,7 +90,7 @@ read_key() {
         }
 }
 
-declare -A key_functions
+declare -gA key_functions
 
 register_key() {
     [[ -z "$1" || -z "$2" ]] && return 255
@@ -88,9 +98,10 @@ register_key() {
 }
 
 key_dispatch() {
+    local input="${1:-/dev/tty}"
 
     local k
-    k=$(read_key)
+    k=$(read_key "$input")
 
     [[ -v DEBUG && -n "$DEBUG" ]] && [[ -v key_dispatch["$k"] ]] && echo -e "$k\t${key_functions["$k"]}" >> keys.out
 
@@ -120,7 +131,9 @@ prompt() {
     local var=$1
     local text=$2
 
-    read -rp "$text" "$var"
+    local input="${3:-/dev/tty}"
+
+    read -rp "$text" "$var" < "$input"
 }
 
 ###############################################################################
