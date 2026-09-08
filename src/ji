@@ -5,6 +5,90 @@ source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")"/screen.bash
 
 set -Eeuo pipefail
 
+usage() {
+    local scriptname="$(basename "${BASH_SOURCE[0]}")"
+    echo    "$scriptname - a minimal terminal todo list manager"
+    echo
+    echo    "Usage: $(basename "${BASH_SOURCE[0]}") [-q] [-l] [-m markdown-file] file"
+    echo
+    echo Options
+    echo
+    echo -e "\t-q\tDo not print remaining action items"
+    echo -e "\t-l\tList only, do not update todo items"
+    echo -e "\t-m\tWrite todo list to a Markdown file"
+    echo -e "\t-h\tDisplay this message"
+    echo
+    echo    "Upon update of a todo item, the list gets written back to the todo"
+    echo    "list file. Listing the items only does not modify the file."
+    echo
+    echo    "Key bindings"
+    echo
+    echo -e "\tUp/Down arrow keys\tCycle all items under a parent todo item"
+    echo -e "\tRight arrow key\t\tExpand current todo item"
+    echo -e "\tLeft arrow key\t\tCollapse current todo item"
+    echo -e "\tEnter key\t\tMark current todo item as completed"
+    echo -e "\tCtrl - C\t\tQuit updating todo items without saving"
+    echo
+}
+
+parse_args() {
+    quiet_mode=0
+    list_only=0
+    markdown_file=""
+    todos_file=""
+
+    while getopts ":qlm:h" opt; do
+        case "$opt" in
+            q)
+                quiet_mode=1
+                ;;
+            m)
+                markdown_file="$OPTARG"
+                ;;
+            l)
+                list_only=1
+                ;;
+            h)
+                usage
+                exit 0
+                ;;
+            :)
+                echo "Error: option -$OPTARG requires an argument" >&2
+                usage >&2
+                return 1
+                ;;
+            \?)
+                echo "Error: invalid option -$OPTARG" >&2
+                usage >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Remove parsed options.
+    shift $((OPTIND - 1))
+
+    # Require exactly one filename.
+    if [[ $# -ne 1 ]]; then
+        echo "Error: exactly one filename is required" >&2
+        return 1
+    fi
+
+    todos_file="$1"
+    [[ ! -f "$todos_file" ]] && \
+        {
+            echo "Error: todos file does not exist" >&2
+            return 1
+        }
+
+    [[ \
+        -z "$todos_file" && \
+        -v TODOS_FILE && \
+        -n "$TODOS_FILE" && \
+        -f "$TODOS_FILE"
+    ]] && todos_file="$TODOS_FILE" || true
+}
+
 load_todos() {
     [[ $# -lt 2 ]] && \
         {
@@ -183,85 +267,6 @@ save_todo_item() {
     return 0
 }
 
-usage() {
-    local scriptname="$(basename "${BASH_SOURCE[0]}")"
-    echo    "$scriptname - a minimal terminal todo list manager"
-    echo
-    echo    "Usage: $(basename "${BASH_SOURCE[0]}") [-l] [-m markdown-file] file"
-    echo
-    echo Options
-    echo
-    echo -e "\t-l\tList only, do not update todo items"
-    echo -e "\t-m\tWrite todo list to a Markdown file"
-    echo -e "\t-h\tDisplay this message"
-    echo
-    echo    "Upon update of a todo item, the list gets written back to the todo"
-    echo    "list file. Listing the items only does not modify the file."
-    echo
-    echo    "Key bindings"
-    echo
-    echo -e "\tUp/Down arrow keys\tCycle all items under a parent todo item"
-    echo -e "\tRight arrow key\t\tExpand current todo item"
-    echo -e "\tLeft arrow key\t\tCollapse current todo item"
-    echo -e "\tEnter key\t\tMark current todo item as completed"
-    echo -e "\tCtrl - C\t\tQuit updating todo items without saving"
-    echo
-}
-
-parse_args() {
-    markdown_file=""
-    list_only=0
-    todos_file=""
-
-    while getopts ":m:lh" opt; do
-        case "$opt" in
-            m)
-                markdown_file="$OPTARG"
-                ;;
-            l)
-                list_only=1
-                ;;
-            h)
-                usage
-                exit 0
-                ;;
-            :)
-                echo "Error: option -$OPTARG requires an argument" >&2
-                usage >&2
-                return 1
-                ;;
-            \?)
-                echo "Error: invalid option -$OPTARG" >&2
-                usage >&2
-                return 1
-                ;;
-        esac
-    done
-
-    # Remove parsed options.
-    shift $((OPTIND - 1))
-
-    # Require exactly one filename.
-    if [[ $# -ne 1 ]]; then
-        echo "Error: exactly one filename is required" >&2
-        return 1
-    fi
-
-    todos_file="$1"
-    [[ ! -f "$todos_file" ]] && \
-        {
-            echo "Error: todos file does not exist" >&2
-            return 1
-        }
-
-    [[ \
-        -z "$todos_file" && \
-        -v TODOS_FILE && \
-        -n "$TODOS_FILE" && \
-        -f "$TODOS_FILE"
-    ]] && todos_file="$TODOS_FILE" || true
-}
-
 get_cursor() {
     declare -n array_name="$1"
     cursor_str=$(cursor_position)
@@ -385,26 +390,7 @@ decrement_todo_index() {
         }
 }
 
-end() {
-    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
-
-    destroy_screen
-
-    [[ -v todoitem && -n "$todoitem" ]] && \
-        {
-            clear_line
-            bold
-            fg 76
-            printsln "$todoitem - marked as complete"
-            reset_style
-
-            (indexed_array_find current_todo_list "$todoitem") && \
-                remove_indexed_array_item current_todo_list "$todoitem"
-        }
-
-    [[ -v DEBUG && -n "$DEBUG" ]] && echo "$current_todo_list"
-    [[ -v DEBUG && -n "$DEBUG" ]] && echo "${current_todo_list[@]}"
-
+print_remaining_todos() {
     [[ ${#todos[@]} -eq 0 ]] && \
         {
             bold
@@ -426,10 +412,34 @@ end() {
                     print_todo_item todos 1>>"$markdown_file"
                 }
         }
+}
 
-    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
+end() {
+    [[ -v DEBUG && -n "$DEBUG" ]] && set -x
+
+    destroy_screen
+
+    [[ -v todoitem && -n "$todoitem" ]] && \
+        {
+            clear_line
+            bold
+            fg 76
+            printsln "$todoitem - marked as complete"
+            reset_style
+
+            (indexed_array_find current_todo_list "$todoitem") && \
+                remove_indexed_array_item current_todo_list "$todoitem"
+        }
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && echo "$current_todo_list"
+    [[ -v DEBUG && -n "$DEBUG" ]] && echo "${current_todo_list[@]}"
 
     save_todos todos "$todos_file"
+
+    [[ $quiet_mode -eq 0 ]] && \
+        print_remaining_todos
+
+    [[ -v DEBUG && -n "$DEBUG" ]] && set +x
 
     return 0
 }
