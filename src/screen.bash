@@ -311,11 +311,11 @@ set_style() {
 # Maintain a virtual screen buffer yourself.
 #
 
-declare -a SCREEN
+declare -ga SCREEN
 
 screen_resize() {
     local num_rows=$1
-    for ((i=1; i<=num_rows; i++)); do
+    for ((i=0; i<num_rows; i++)); do
         SCREEN[$i]=""
     done
 }
@@ -333,8 +333,8 @@ screen_get() {
 }
 
 screen_render() {
-    row=1
-    col=1
+    local row=1
+    local col=1
     [[ -n $1 ]] && row=$1 && shift
     [[ -n $1 ]] && col=$1 && shift
     for item in "${SCREEN[@]}"; do
@@ -348,7 +348,6 @@ selection_end=0
 selection_buffer=""
 
 selection_copy() {
-
     selection_buffer=""
 
     local i
@@ -381,20 +380,26 @@ printsln() {
 print_array_fmt() {
   declare -n array_name="$1"
   local sep="$2"
+  local prev_e
 
   for e in "${array_name[@]}" "---"
   do
-      printf "%s" "$e"
-      [[ ! "$e" =~ ^---$ ]] && printf "%s" "$sep"
+      [[ -n "$prev_e" ]] && \
+          printf "%s" "$prev_e" && \
+          [[ ! "$e" =~ ^---$ ]] && \
+          printf "%s" "$sep"
+      prev_e="$e"
   done
 }
 
 print_array() {
-    print_array_at $(cursor_position) "$1"
+    local input="${2:-/dev/tty}"
+    local output="${3:-/dev/tty}"
+
+    print_array_at $(cursor_position "$input" "$output") "$1"
 }
 
 print_array_at() {
-
     local row=$1
     local col=$2
     shift 2
@@ -410,7 +415,6 @@ print_array_at() {
 }
 
 print_var_at() {
-
     local row=$1
     local col=$2
     local text=$3
@@ -419,7 +423,6 @@ print_var_at() {
 }
 
 print_file_at() {
-
     local row=$1
     local col=$2
     local file=$3
@@ -453,7 +456,6 @@ pad_left() {
 }
 
 center() {
-
     local width=$1
     local text=$2
 
@@ -491,7 +493,7 @@ print_hline() {
 print_vline() {
     local h=1
     [[ -n $1 ]] && h=$1
-    for ((i=1; i<=h; ++i)); do
+    for ((i=0; i<h; ++i)); do
         echo -n $BOX_HEAVY_VER
     done
 }
@@ -550,8 +552,12 @@ assoc_array_find() {
     declare -n array_name="$1"
     local element="$2"
     local array_len=${#array_name[@]}
-    declare -a match_result
     local match_result=("${array_name[@]/"$element"/}")
+
+    for i in "${!match_result[@]}"; do
+        [[ -z "${match_result[$i]}" ]] && unset 'match_result[i]'
+    done
+
     [[ ${#match_result[@]} -eq $array_len ]] && \
         return 1 || return 0
 }
@@ -568,6 +574,21 @@ indexed_array_find() {
     done
     [[ ${#match_result[@]} -eq $array_len ]] && \
         return 1 || return 0
+}
+
+remove_assoc_array_item() {
+    declare -n array_name="$1"
+    local element="$2"
+    local key
+
+    for key in "${!array_name[@]}"; do
+        if [[ "${array_name[$key]}" == "$element" ]]; then
+            unset "array_name[$key]"
+            break
+        fi
+    done
+
+    return 0
 }
 
 remove_indexed_array_item() {
