@@ -177,10 +177,11 @@ load_todos_cascade() {
         [[ -z "$item" ]] && continue
         [[ -v DEBUG && -n "$DEBUG" ]] && echo $item
 
-        [[ ! "$item" =~ ^[[:space:]]*[[:alnum:][:punct:][:space:]]+$ ]] && \
+        [[ ! "$item" =~ ^[[:space:]]*(-[[:space:]]+)?[[:alnum:][:punct:][:space:]]+$ ]] && \
             continue
 
-        local indented_item="${item##* [![:alnum:][:punct:]]}"
+        local indented_item="${item##*[- ][![:alnum:][:punct:]]}"
+        indented_item="${indented_item%%:}"
         local cur_indent=$(expr index "$item" "${indented_item%% *}")
         item="$indented_item"
         unset indented_item
@@ -379,14 +380,11 @@ print_todo_item() {
     local indent=0
     [[ $# -gt 1 ]] && indent="$2"
 
-    # Print Markdown list markers for indent 0
-    [[ "$indent" == "-m" ]] && indent=-1
-
     for item in "${array_name[@]}"
     do
         [[ -n "$indent" && $indent -ne 0 ]] && \
-            printf "  %.s" $(seq 1 $indent) && \
-            echo -n "- "
+            printf "  %.s" $(seq 1 $indent)
+        echo -n "- "
         echo "$item"
         item="${item// /_}"
         item="${item//[[:punct:]]/_}"
