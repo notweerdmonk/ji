@@ -176,6 +176,7 @@ load_todos_cascade() {
     do
         [[ -z "$item" ]] && continue
         [[ -v DEBUG && -n "$DEBUG" ]] && echo $item
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo $last_idx
 
         [[ ! "$item" =~ ^[[:space:]]*(-[[:space:]]+)?[[:alnum:][:punct:][:space:]]+$ ]] && \
             continue
@@ -194,7 +195,9 @@ load_todos_cascade() {
 
         [[ $cur_indent -eq $last_index ]] && \
             {
-                curr_item_arr+=("$item")
+                ([[ "${curr_item_arr[@]}" != "" ]] && \
+                    indexed_array_find curr_item_arr "$item") || \
+                    curr_item_arr+=("$item")
                 ((++last_idx)) || :
                 item="${item// /_}"
                 item="${item//[[:punct:]]/_}"
@@ -230,7 +233,11 @@ load_todos_cascade() {
                                         curr_item_arr="${item_map[$parent_indent]}"
                                 }
                         }
-                curr_item_arr+=("$item")
+                [[ -v DEBUG && -n "$DEBUG" ]] && echo ${!curr_item_arr}
+                [[ -v DEBUG && -n "$DEBUG" ]] && echo ${curr_item_arr[@]}
+                ([[ "${curr_item_arr[@]}" != "" ]] && \
+                    indexed_array_find curr_item_arr "$item") || \
+                    curr_item_arr+=("$item")
                 ((++last_idx)) || :
                 item="${item// /_}"
                 item="${item//[[:punct:]]/_}"
@@ -238,6 +245,7 @@ load_todos_cascade() {
             }
 
         [[ -v DEBUG && -n "$DEBUG" ]] && echo $last_idx
+        [[ -v DEBUG && -n "$DEBUG" ]] && echo ${curr_item_arr[@]}
     done < "$2"
 
     [[ -v DEBUG && -n "$DEBUG" ]] && set +x
@@ -534,18 +542,15 @@ key_left() {
 }
 
 key_enter() {
-    stop=1
     todoitem="${current_todo_list[$todo_index]}"
     return 1
 }
 
 key_quit() {
-    stop=1
     return 1
 }
 
 key_other() {
-    stop=1
     return 1
 }
 
