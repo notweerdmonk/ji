@@ -550,7 +550,7 @@ key_right() {
 }
 
 key_left() {
-    [[ "${#todo_stack[@]}" -ne 0 ]] && \
+    [[ -n "${todo_stack[*]}" && "${#todo_stack[@]}" -ne 0 ]] && \
         {
             declare -gn current_todo_list="${todo_stack[-1]}"
             unset todo_stack[-1]
